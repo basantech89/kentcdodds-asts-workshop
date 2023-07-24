@@ -5,11 +5,6 @@
 
 const disallowedMethods = ['log', 'info', 'warn', 'error', 'dir']
 
-const aliases = []
-function isAlias(value) {
-  return aliases.some(alias => alias === value)
-}
-
 module.exports = {
   meta: {
     schema: [
@@ -27,48 +22,63 @@ module.exports = {
     ],
   },
   create(context) {
-    return {
-      Identifier(node) {
-        if (
-          !looksLike(node, {
-            name: value => value === 'console' || isAlias(value),
-            parent: {
-              type: 'MemberExpression',
-              parent: {type: 'CallExpression'},
-              property: {
-                name: value => {
-                  const allowedMethods = (context.options[0] || {})
-                    .allowedMethods || []
-                  return (
-                    disallowedMethods.includes(value) &&
-                    !allowedMethods.includes(value)
-                  )
-                },
-              },
+    const consoleUsages = []
+
+    function isDisallowedFunctionCall(identifier) {
+      return looksLike(identifier, {
+        parent: {
+          type: 'MemberExpression',
+          parent: {type: 'CallExpression'},
+          property: {
+            name: value => {
+              const allowedMethods = (context.options[0] || {})
+                .allowedMethods || []
+              return (
+                disallowedMethods.includes(value) &&
+                !allowedMethods.includes(value)
+              )
             },
+          },
+        },
+      })
+    }
+
+    return {
+      'Program:exit'(node) {
+        consoleUsages.forEach(identifier => {
+          if (identifier.parent.type === 'VariableDeclarator') {
+            const references = context
+              .getDeclaredVariables(identifier.parent)[0]
+              .references.slice(1)
+
+            references.forEach(reference => {
+              if (isDisallowedFunctionCall(reference.identifier)) {
+                context.report({
+                  node: reference.identifier.parent.property,
+                  message: 'Using console is not allowed',
+                })
+              }
+            })
+          }
+
+          if (
+            identifier.name === 'console' &&
+            !isDisallowedFunctionCall(identifier)
+          ) {
+            return
+          }
+
+          context.report({
+            node: identifier.parent.property,
+            message: 'Using console is not allowed',
           })
-        ) {
-          return
-        }
-        context.report({
-          node: node.parent.property,
-          message: 'Using console is not allowed',
         })
       },
-      VariableDeclarator(node) {
-        if (node.init.name === 'console' || isAlias(node.init.name)) {
-          aliases.push(node.id.name)
+      Identifier(node) {
+        if (node.name !== 'console') {
+          return
         }
-      },
-      AssignmentExpression(node) {
-        const aliasIdx = aliases.findIndex(alias => alias === node.left.name)
-        if (
-          aliasIdx >= 0 &&
-          node.right.name !== 'console' &&
-          !isAlias(node.right.name)
-        ) {
-          aliases.splice(aliasIdx, 1)
-        }
+        consoleUsages.push(node)
       },
     }
   },
